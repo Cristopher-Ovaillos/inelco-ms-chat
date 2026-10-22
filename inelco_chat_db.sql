@@ -1,5 +1,5 @@
 /*
-  base de chat (salas, participantes, mensajes, adjuntos)
+  base de chat segun el MER (inelco_chat_db)
 
   la base se crea aparte, una sola vez:
     psql -U postgres -c "CREATE DATABASE inelco_chat_db"
@@ -7,11 +7,14 @@
   y despues se corre este script dentro de ella:
     psql -U postgres -d inelco_chat_db -f inelco_chat_db.sql
 
-  desde psql tambien sirve: \c inelco_chat_db y luego \i inelco_chat_db.sql
-  se puede ejecutar varias veces, las tablas y los roles iniciales no se duplican
+  se puede ejecutar varias veces, las tablas y los datos iniciales no se duplican
 */
 
-CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
+-- enum del MER: quien envio el mensaje
+DO $$ BEGIN
+    CREATE TYPE enum_tipo_remitente AS ENUM ('usuario', 'ia', 'sistema');
+EXCEPTION WHEN duplicate_object THEN NULL;
+END $$;
 
 
 /*
@@ -28,23 +31,23 @@ CREATE TABLE IF NOT EXISTS roles_chat (
 /*
   chat / sala
 
-  hay una sala por consulta, por eso consulta_id es unique. el id de la consulta llega
-  por evento desde tickets y no lleva fk porque esa tabla esta en otra base.
-  fecha_fin queda en null mientras la sala sigue abierta.
+  hay una sala por consulta, por eso consulta_id es unique (relacion "origina" 1 a 1 del MER).
+  el id de la consulta llega por evento desde tickets y no lleva fk porque esa tabla
+  esta en otra base. fecha_fin queda en null mientras la sala sigue abierta.
 */
 CREATE TABLE IF NOT EXISTS chats (
     id SERIAL PRIMARY KEY,
     consulta_id INTEGER NOT NULL UNIQUE,
-    fecha_inicio TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-    fecha_fin TIMESTAMP WITH TIME ZONE NULL
+    fecha_inicio TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    fecha_fin TIMESTAMPTZ NULL
 );
 
 
 /*
   participantes de la sala
 
-  usuario_id es referencia logica a inelco_users_db. una persona no puede estar dos
-  veces en la misma sala.
+  usuario_id es referencia logica a inelco_users_db (usuarios.id). una persona no puede
+  estar dos veces en la misma sala.
 */
 CREATE TABLE IF NOT EXISTS participantes (
     id SERIAL PRIMARY KEY,
@@ -65,10 +68,13 @@ CREATE TABLE IF NOT EXISTS mensajes (
     id SERIAL PRIMARY KEY,
     chat_id INTEGER NOT NULL REFERENCES chats(id) ON DELETE CASCADE,
     usuario_id UUID NULL,
-    tipo_remitente VARCHAR(20) NOT NULL CHECK (tipo_remitente IN ('usuario', 'ia', 'sistema')),
+    tipo_remitente enum_tipo_remitente NOT NULL,
     contenido TEXT NOT NULL,
-    fecha_envio TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+    fecha_envio TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
+
+-- indice para paginar el historial de una sala ordenado por fecha (GET /chats/{id}/mensajes)
+CREATE INDEX IF NOT EXISTS idx_mensajes_chat_fecha ON mensajes (chat_id, fecha_envio);
 
 
 /*
@@ -84,7 +90,7 @@ CREATE TABLE IF NOT EXISTS adjuntos (
     nombre_archivo VARCHAR(255) NOT NULL,
     tipo_archivo VARCHAR(100) NOT NULL,
     tamano INTEGER NOT NULL,
-    fecha_carga TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+    fecha_carga TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
 
